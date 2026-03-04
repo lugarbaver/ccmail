@@ -1,0 +1,209 @@
+
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QQ 头像（qlogo）+ 网名（portrait）获取器</title>
+  <style>
+    body{font-family:"PingFang SC","Microsoft YaHei",Arial,sans-serif;background:#f6f8fb;margin:0;display:flex;align-items:center;justify-content:center;height:100vh}
+    .card{width:520px;background:#fff;padding:18px;border-radius:12px;box-shadow:0 8px 22px rgba(20,30,60,.06)}
+    .row{display:flex;gap:8px}
+    input{flex:1;padding:10px;border:1px solid #e6e9ef;border-radius:8px;font-size:14px}
+    button{padding:10px 14px;border-radius:8px;border:0;background:#1677ff;color:#fff;cursor:pointer}
+    .result{display:flex;gap:14px;align-items:center;margin-top:14px}
+    .avatar{width:100px;height:100px;border-radius:50%;overflow:hidden;background:#fafafa;border:1px solid #eee;display:flex;align-items:center;justify-content:center}
+    .avatar img{width:100%;height:100%;object-fit:cover}
+    .meta p{margin:4px 0;font-size:14px}
+    .hint{font-size:13px;color:#666;margin-top:8px}
+    .error{color:#d93025}
+    pre.raw{background:#f4f6fb;padding:8px;border-radius:6px;font-size:12px;overflow:auto;max-height:120px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2 style="margin:0 0 10px 0;font-size:16px">QQ 头像（qlogo）+ 网名（portrait）获取器</h2>
+
+    <div class="row">
+      <input id="qqInput" placeholder="输入 QQ 号，例如：10001 或 10001@qq.com">
+      <button id="btn">获取</button>
+    </div>
+
+    <div id="message" class="hint"></div>
+
+    <div id="output" class="result" style="display:none">
+      <div class="avatar"><img id="avatar" alt="头像"></div>
+      <div class="meta" style="flex:1">
+        <p>QQ：<span id="qqShow"></span></p>
+        <p>网名：<strong id="nickShow">-</strong></p>
+        <p class="hint">头像来源：<span class="small">q.qlogo.cn</span></p>
+        <!--<div style="margin-top:8px">
+          <div class="hint" style="margin-bottom:6px">portrait 接口原始返回（用于调试）：</div>
+          <pre id="rawApi" class="raw">-</pre>
+        </div> -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    const input = document.getElementById('qqInput');
+    const btn = document.getElementById('btn');
+    const avatarImg = document.getElementById('avatar');
+    const nickShow = document.getElementById('nickShow');
+    const qqShow = document.getElementById('qqShow');
+    const output = document.getElementById('output');
+    const msg = document.getElementById('message');
+    const rawApi = document.getElementById('rawApi');
+
+    // 用于管理并发请求：{ qq: { timer, script } }
+    window._qq_pending = window._qq_pending || {};
+
+    // portrait 返回的全局 JSONP 回调（腾讯接口返回 portraitCallBack({...})）
+    // 我们只解析昵称（arr[6]）并把 raw 数据展示；头像由 q.qlogo.cn 构建
+    window.portraitCallBack = function(data){
+      try{
+        if(!data) return;
+        Object.keys(data).forEach(function(qq){
+          const entry = window._qq_pending && window._qq_pending[qq];
+          const arr = data[qq];
+          if(entry){
+            clearTimeout(entry.timer);
+            // arr[6] 是昵称，arr[0] 可能也是头像 url，但我们忽略并统一使用 q.qlogo.cn
+            const nick = Array.isArray(arr) ? (arr[6] || arr[0] || '') : '';
+            entry.resolve(null, { qq, nick, raw: arr });
+            // 清理 script
+            try{ if(entry.script && entry.script.parentNode) entry.script.parentNode.removeChild(entry.script); }catch(e){}
+            delete window._qq_pending[qq];
+          }
+        });
+      }catch(e){
+        console.error('portraitCallBack error', e);
+      }
+    };
+
+    function normalizeQQ(text){
+      if(!text) return '';
+      text = text.trim();
+      if(text.includes('@')) text = text.split('@',1)[0];
+      const m = text.match(/(\d{4,12})/);
+      return m ? m[1] : '';
+    }
+
+    function qlogoUrl(qq, size){
+      size = size || 100;
+      // 强制使用 https q.qlogo.cn
+      return 'https://q.qlogo.cn/g?b=qq&nk=' + encodeURIComponent(qq) + '&s=' + encodeURIComponent(size);
+    }
+
+    function showMessage(s, isErr){
+      msg.textContent = s || '';
+      msg.className = isErr ? 'hint error' : 'hint';
+    }
+
+    function showResult(info){
+      output.style.display = 'flex';
+      qqShow.textContent = info.qq;
+      avatarImg.src = qlogoUrl(info.qq, 100);
+      nickShow.textContent = info.nick || '(未设置)';
+      rawApi.textContent = JSON.stringify(info.raw, null, 2);
+    }
+
+    // 发起 portrait JSONP 请求以获取昵称等字段
+    function fetchPortrait(qq){
+      // 先取消原有待处理请求（同 qq）
+      if(window._qq_pending[qq]){
+        try{
+          clearTimeout(window._qq_pending[qq].timer);
+          if(window._qq_pending[qq].script && window._qq_pending[qq].script.parentNode) window._qq_pending[qq].script.parentNode.removeChild(window._qq_pending[qq].script);
+        }catch(e){}
+        delete window._qq_pending[qq];
+      }
+
+      showMessage('正在请求 portrait 接口获取网名…');
+
+      const script = document.createElement('script');
+      script.async = true;
+      // portrait 接口通常返回 portraitCallBack({...})，不需要 callback 参数
+      script.src = 'https://users.qzone.qq.com/fcg-bin/cgi_get_portrait.fcg?uins=' + encodeURIComponent(qq);
+
+      let resolved = false;
+      const timer = setTimeout(function(){
+        if(resolved) return;
+        resolved = true;
+        // 超时
+        try{ if(script.parentNode) script.parentNode.removeChild(script); }catch(e){}
+        delete window._qq_pending[qq];
+        showMessage('portrait 接口请求超时或被拦截，已显示头像（q.qlogo.cn），网名无法获取。若长期失败请用服务器代理。', true);
+        // 显示头像，仅展示 qq/默认网名占位
+        showResult({ qq: qq, nick: '(无法获取)', raw: [] });
+      }, 7000);
+
+      // Promise 风格回调封装
+      const promiseResolve = function(err, info){
+        if(resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        if(err){
+          showMessage('解析 portrait 返回出错：' + (err.message || err), true);
+          // 仍显示头像
+          showResult({ qq: qq, nick: '(解析错误)', raw: [] });
+        }else{
+          showMessage('获取成功');
+          showResult(info);
+        }
+      };
+
+      window._qq_pending[qq] = {
+        timer: timer,
+        script: script,
+        resolve: promiseResolve
+      };
+
+      script.onerror = function(){
+        if(resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        try{ if(script.parentNode) script.parentNode.removeChild(script); }catch(e){}
+        delete window._qq_pending[qq];
+        showMessage('portrait 脚本加载失败或被拦截，已显示头像，网名无法获取。', true);
+        showResult({ qq: qq, nick: '(加载失败)', raw: [] });
+      };
+
+      // 将 script 注入页面，portraitCallBack 会处理返回
+      document.body.appendChild(script);
+
+      // **立刻显示头像**（不等待 portrait 返回），因为头像来自 q.qlogo.cn，不受 JSONP 影响
+      avatarImg.src = qlogoUrl(qq, 100);
+      qqShow.textContent = qq;
+      nickShow.textContent = '加载中...';
+      rawApi.textContent = '-';
+      output.style.display = 'flex';
+    }
+
+    btn.addEventListener('click', function(){
+      const qq = normalizeQQ(input.value);
+      if(!qq){ showMessage('请输入有效 QQ 号，例如 10001 或 10001@qq.com', true); return; }
+      fetchPortrait(qq);
+    });
+
+    input.addEventListener('keydown', function(e){ if(e.key === 'Enter') btn.click(); });
+
+    // 可选：自动检测输入并防抖自动查询（取消注释可启用）
+    /*
+    let debounce;
+    input.addEventListener('input', function(){
+      clearTimeout(debounce);
+      debounce = setTimeout(function(){
+        const qq = normalizeQQ(input.value);
+        if(qq) fetchPortrait(qq);
+      }, 600);
+    });
+    */
+
+    // 初始值为空
+    input.value = '';
+  })();
+  </script>
+</body>
+</html>
